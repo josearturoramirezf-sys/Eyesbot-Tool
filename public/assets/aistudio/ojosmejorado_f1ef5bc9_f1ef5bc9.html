@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Rostro Robot Verde Neón</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: #000000;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      touch-action: manipulation;
+      font-family: Arial, sans-serif;
+    }
+
+    canvas {
+      display: block;
+      background-color: #000000;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* Botón Central de ON */
+    #startBtn {
+      position: absolute;
+      z-index: 10;
+      padding: 18px 40px;
+      font-size: 22px;
+      font-weight: bold;
+      letter-spacing: 2px;
+      color: #00BD00;
+      background-color: #000000;
+      border: 3px solid #00BD00;
+      border-radius: 50px;
+      box-shadow: 0 0 20px rgba(0, 189, 0, 0.4);
+      cursor: pointer;
+      outline: none;
+      transition: transform 0.2s, background-color 0.2s, box-shadow 0.2s;
+    }
+
+    #startBtn:active {
+      transform: scale(0.92);
+      background-color: #00BD00;
+      color: #000000;
+      box-shadow: 0 0 30px rgba(0, 189, 0, 0.8);
+    }
+  </style>
+</head>
+<body>
+
+  <button id="startBtn">ENCENDER</button>
+  <canvas id="robotCanvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById("robotCanvas");
+    const ctx = canvas.getContext("2d");
+    const startBtn = document.getElementById("startBtn");
+
+    const EYE_COLOR = "#00BD00";
+    const EMOTION_DURATION_MS = 8000;
+
+    const MOOD_TARGETS = {
+      DEFAULT:    { topL: 0,    topR: 0,    botC: 0,    scaleY: 1.0,  offsetEyeY: 0 },
+      TIRED:      { topL: 0.52, topR: 0.52, botC: 0,    scaleY: 0.85, offsetEyeY: 0.05 },
+      SAD:        { topL: 0.42, topR: 0.0,  botC: 0,    scaleY: 0.95, offsetEyeY: 0 },
+      ANGRY:      { topL: 0.0,  topR: 0.45, botC: 0,    scaleY: 0.9,  offsetEyeY: 0 },
+      SUSPICIOUS: { topL: 0.48, topR: 0.48, botC: 0,    scaleY: 0.7,  offsetEyeY: -0.02 },
+      CUTE:       { topL: 0.0,  topR: 0.0,  botC: 0.45, scaleY: 1.05, offsetEyeY: -0.03 },
+      WONDER:     { topL: 0.30, topR: 0.0,  botC: 0,    scaleY: 1.1,  offsetEyeY: -0.02 }
+    };
+
+    const MOOD_KEYS = Object.keys(MOOD_TARGETS);
+    let currentMoodIndex = 0;
+    let isRunning = false;
+
+    let animState = { ...MOOD_TARGETS.DEFAULT };
+
+    let cWidth = 0, cHeight = 0;
+    let eyeWidth = 0, eyeHeight = 0, eyeRadius = 0;
+    let leftEyeX = 0, rightEyeX = 0, eyeY = 0;
+    let maxOffsetX = 0, swayOffset = 0;
+
+    let blinkScaleY = 1.0;
+    let isBlinking = false;
+    let nextBlinkTime = Date.now() + 2000;
+
+    // Alternar Pantalla Completa
+    function toggleFullScreen() {
+      try {
+        const isFS = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+        
+        if (!isFS) {
+          const docEl = document.documentElement;
+          if (docEl.requestFullscreen) {
+            docEl.requestFullscreen().catch(() => {});
+          } else if (docEl.webkitRequestFullscreen) {
+            docEl.webkitRequestFullscreen();
+          } else if (docEl.msRequestFullscreen) {
+            docEl.msRequestFullscreen();
+          }
+        } else {
+          if (document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+          } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+          } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+          }
+        }
+      } catch (err) {
+        // Ignorar restricciones del entorno de navegación
+      }
+    }
+
+    // Arrancar el canvas del Robot de forma segura e inmediata
+    function startRobot(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      
+      if (isRunning) return;
+      isRunning = true;
+      startBtn.style.display = 'none';
+      
+      updateDimensions();
+      toggleFullScreen();
+      requestAnimationFrame(animate);
+    }
+
+    // Escuchar pointerdown + click para máxima compatibilidad móvil
+    startBtn.addEventListener('pointerdown', startRobot, { once: true });
+    startBtn.addEventListener('click', startRobot, { once: true });
+
+    // Detección de doble toque (Double Tap) para alternar Fullscreen
+    let lastTapTime = 0;
+    window.addEventListener('touchend', (e) => {
+      if (e.target === startBtn) return;
+      
+      const currentTime = new Date().getTime();
+      const tapLength = currentTime - lastTapTime;
+
+      if (tapLength < 300 && tapLength > 0) {
+        toggleFullScreen();
+        e.preventDefault();
+      }
+      lastTapTime = currentTime;
+    });
+
+    window.addEventListener('dblclick', (e) => {
+      if (e.target === startBtn) return;
+      toggleFullScreen();
+    });
+
+    function updateDimensions() {
+      cWidth = window.innerWidth;
+      cHeight = window.innerHeight;
+      canvas.width = cWidth;
+      canvas.height = cHeight;
+
+      const isLandscape = cWidth > cHeight;
+      const baseDim = isLandscape ? cHeight : cWidth;
+
+      eyeWidth = baseDim * 0.28;
+      eyeHeight = eyeWidth * 1.48;
+      eyeRadius = eyeWidth * 0.30;
+
+      const centerDist = isLandscape ? cWidth * 0.22 : cWidth * 0.26;
+      leftEyeX = (cWidth / 2) - centerDist - (eyeWidth / 2);
+      rightEyeX = (cWidth / 2) + centerDist - (eyeWidth / 2);
+      eyeY = (cHeight / 2) - (eyeHeight / 2);
+
+      maxOffsetX = eyeWidth * 0.18;
+    }
+
+    window.addEventListener('resize', updateDimensions);
+
+    setInterval(() => {
+      if (!isRunning) return;
+      currentMoodIndex = (currentMoodIndex + 1) % MOOD_KEYS.length;
+    }, EMOTION_DURATION_MS);
+
+    function updateBlink() {
+      const now = Date.now();
+      if (now > nextBlinkTime && !isBlinking) {
+        isBlinking = true;
+      }
+
+      if (isBlinking) {
+        blinkScaleY -= 0.18;
+        if (blinkScaleY <= 0.05) {
+          blinkScaleY = 0.05;
+          isBlinking = false;
+          nextBlinkTime = now + 2500 + Math.random() * 4000;
+        }
+      } else {
+        if (blinkScaleY < 1.0) {
+          blinkScaleY += 0.18;
+          if (blinkScaleY > 1.0) blinkScaleY = 1.0;
+        }
+      }
+    }
+
+    function lerp(start, end, amt) {
+      return (1 - amt) * start + amt * end;
+    }
+
+    function updateState() {
+      const target = MOOD_TARGETS[MOOD_KEYS[currentMoodIndex]];
+      const speed = 0.08;
+
+      animState.topL = lerp(animState.topL, target.topL, speed);
+      animState.topR = lerp(animState.topR, target.topR, speed);
+      animState.botC = lerp(animState.botC, target.botC, speed);
+      animState.scaleY = lerp(animState.scaleY, target.scaleY, speed);
+      animState.offsetEyeY = lerp(animState.offsetEyeY, target.offsetEyeY, speed);
+    }
+
+    function drawRoundRect(x, y, w, h, r) {
+      if (w < 2 * r) r = w / 2;
+      if (h < 2 * r) r = h / 2;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawEye(x, y, w, h, isLeft) {
+      ctx.save();
+
+      const effScaleY = animState.scaleY * blinkScaleY;
+      const centerY = y + h / 2 + (h * animState.offsetEyeY);
+
+      ctx.translate(x + w / 2, centerY);
+      ctx.scale(1, effScaleY);
+      ctx.translate(-(x + w / 2), -(y + h / 2));
+
+      ctx.shadowColor = EYE_COLOR;
+      ctx.shadowBlur = 25;
+
+      ctx.fillStyle = EYE_COLOR;
+      drawRoundRect(x, y, w, h, eyeRadius);
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#030314";
+      // Aumentamos el padding para cubrir ampliamente el resplandor (glow)
+      const pad = w * 0.5;
+
+      const cutL = isLeft ? animState.topL : animState.topR;
+      const cutR = isLeft ? animState.topR : animState.topL;
+
+      if (cutL > 0.01 || cutR > 0.01) {
+        ctx.beginPath();
+        ctx.moveTo(x - pad, y - pad);
+        ctx.lineTo(x + w + pad, y - pad);
+        ctx.lineTo(x + w + pad, y + (h * cutR));
+        ctx.lineTo(x - pad, y + (h * cutL));
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      if (animState.botC > 0.01) {
+        ctx.beginPath();
+        const arcY = y + h + (h * (0.65 - animState.botC));
+        // Se amplía el radio de la máscara circular inferior para cubrir el resplandor lateral
+        ctx.arc(x + w / 2, arcY, w * 0.9, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    function animate(time) {
+      if (!isRunning) return;
+
+      updateBlink();
+      updateState();
+
+      const speedX = 0.0012;
+      const speedY = 0.0008;
+      swayOffset = Math.sin(time * speedX) * maxOffsetX;
+      const verticalSway = Math.cos(time * speedY) * (eyeHeight * 0.04);
+
+      ctx.fillStyle = "#030314";
+      ctx.fillRect(0, 0, cWidth, cHeight);
+
+      const currentLeftX = leftEyeX + swayOffset;
+      const currentRightX = rightEyeX + swayOffset;
+      const currentEyeY = eyeY + verticalSway;
+
+      drawEye(currentLeftX, currentEyeY, eyeWidth, eyeHeight, true);
+      drawEye(currentRightX, currentEyeY, eyeWidth, eyeHeight, false);
+
+      requestAnimationFrame(animate);
+    }
+  </script>
+</body>
+</html>
